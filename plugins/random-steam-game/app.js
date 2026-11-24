@@ -46,6 +46,7 @@ let lang = pf.lang === "ru" ? "ru" : "en";
 let selection = readSelection();
 let game = selection.game;
 const discovery = readDiscovery(DISCOVERY_KEY);
+let catalogWarmup = discovery.games.some((entry) => entry.reviews !== undefined) ? 0 : 2;
 let visible = true;
 let rotating;
 let galleryTimer;
@@ -100,9 +101,9 @@ function saveDiscovery() {
 function pickGame(manual = false) {
   const unseen = (entry) => entry.id !== game?.id && !discovery.recent.includes(entry.id);
   const live = discovery.games.filter(unseen);
-  const ready = live.filter((entry) => prepared.has(detailKey(entry.id, lang)));
-  const choices = ready.length ? ready : live.length ? live : gameCatalog.filter(unseen);
-  const next = choices[Math.floor(Math.random() * choices.length)];
+  const next = live.length
+    ? weightedGame(live, (entry) => prepared.has(detailKey(entry.id, lang)))
+    : randomGame(gameCatalog.filter(unseen));
   selection.nextAt = Date.now() + INTERVAL;
   if (next) {
     if (game && !discovery.recent.includes(game.id)) discovery.recent.push(game.id);
@@ -253,13 +254,14 @@ function browseTargets() {
   const pending = needsDetails() && !browseMisses.has(activeKey) ? [game] : [];
   if (!discovery.games.length && !discovery.nextAt && game?.[lang] && !priorityDetails) return [];
   const ready = discovery.games.filter((entry) => prepared.has(detailKey(entry.id, lang)));
-  if (ready.length >= 6) return pending;
   const available = discovery.games.filter((entry) => {
     const key = detailKey(entry.id, lang);
     return entry.id !== game?.id && !prepared.has(key) && !browseMisses.has(key);
   });
-  while (pending.length < BROWSE_BATCH && available.length) {
-    pending.push(...available.splice(Math.floor(Math.random() * available.length), 1));
+  const unclassified = available.filter((entry) => entry.reviews === undefined);
+  const targets = unclassified.length ? unclassified : ready.length < 6 ? available : [];
+  while (pending.length < BROWSE_BATCH && targets.length) {
+    pending.push(...targets.splice(Math.floor(Math.random() * targets.length), 1));
   }
   return pending;
 }
@@ -284,6 +286,15 @@ async function prefetchDetails(entries, locale) {
       if (details.has(entry.id)) prepared.set(key, details.get(entry.id));
       else browseMisses.add(key);
     }
+    let updatedReviews = false;
+    for (const entry of discovery.games) {
+      const detail = details.get(entry.id);
+      if (detail && entry.reviews !== detail.reviews) {
+        entry.reviews = detail.reviews;
+        updatedReviews = true;
+      }
+    }
+    if (updatedReviews) saveDiscovery();
     while (prepared.size > BROWSE_CACHE) prepared.delete(prepared.keys().next().value);
     while (browseMisses.size > BROWSE_CACHE) browseMisses.delete(browseMisses.values().next().value);
     const current = game && details.get(game.id);
@@ -323,20 +334,31 @@ async function getStore(path) {
 async function refreshDiscovery() {
   const upper = discovery.total || 100_000;
   const pages = Math.max(1, Math.ceil(upper / DISCOVERY_PAGE_SIZE));
-  const start = recoveryPage ? 0 : Math.floor(Math.random() * pages) * DISCOVERY_PAGE_SIZE;
+  const ranked = SEARCH_RANKS[discovery.searchRound];
+  const [first, limit] = ranked || [0, pages];
+  const start = recoveryPage ? 0 : (first + Math.floor(Math.random() * (limit - first))) * DISCOVERY_PAGE_SIZE;
   try {
-    const response = await getStore("/search/results/?category1=998&sort_by=Released_DESC&infinite=1"
+    const order = ranked ? "filter=topsellers" : "sort_by=Released_DESC";
+    const response = await getStore("/search/results/?category1=998&" + order + "&infinite=1"
       + "&hidecomingsoon=1&start=" + start + "&count=" + DISCOVERY_PAGE_SIZE);
     const result = discoveryPage(response);
     recoveryPage = start > 0 && !result.games.length;
-    discovery.total = result.total;
+    if (!ranked) discovery.total = result.total;
+    if (!recoveryPage) discovery.searchRound = (discovery.searchRound + 1) % SEARCH_RANKS.length;
+    const previous = new Map(discovery.games.map((entry) => [entry.id, entry]));
     const unseen = new Map();
     for (const entry of [...result.games, ...discovery.games]) {
-      if (entry.id !== game?.id && !discovery.recent.includes(entry.id)) unseen.set(entry.id, entry);
+      if (entry.id !== game?.id && !discovery.recent.includes(entry.id)) {
+        unseen.set(entry.id, previous.get(entry.id) || entry);
+      }
     }
     discovery.games = [...unseen.values()].slice(0, DISCOVERY_LIMIT);
-    const refreshIn = recoveryPage || result.games.length && discovery.games.length < 7
-      ? HOST_INTERVAL : result.games.length ? INTERVAL : STORE_RETRY;
+    let refreshIn = STORE_RETRY;
+    if (recoveryPage) refreshIn = HOST_INTERVAL;
+    if (result.games.length) {
+      refreshIn = catalogWarmup > 0 || discovery.games.length < 7 ? HOST_INTERVAL : INTERVAL;
+      catalogWarmup = Math.max(0, catalogWarmup - 1);
+    }
     discovery.nextAt = Date.now() + refreshIn;
   } catch {
     discovery.nextAt = Date.now() + STORE_RETRY;
@@ -373,7 +395,7 @@ async function getMetadata(expected, requestedLang, id) {
 function scheduleStore() {
   clearTimeout(storeTimer);
   if (!visible || storeBusy) return;
-  const catalogAt = discovery.games.length < DISCOVERY_LIMIT ? discovery.nextAt : Infinity;
+  const catalogAt = discovery.nextAt;
   const fallback = needsDetails() && (browseBlocked > Date.now() || browseMisses.has(detailKey(game.id, lang)));
   const detailsAt = fallback ? detailRetryAt : Infinity;
   const when = Math.min(catalogAt, detailsAt);

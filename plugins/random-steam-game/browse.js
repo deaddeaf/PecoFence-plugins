@@ -14,6 +14,7 @@ function browseRequest(entries, lang) {
       include_basic_info: true,
       include_assets: true,
       include_screenshots: true,
+      include_reviews: true,
       include_tag_count: 12,
     },
   };
@@ -35,11 +36,13 @@ function browseDetails(items, entries, lang) {
       return artworkUrl(CDN + "/store_item_assets/" + file.replace(/\.jpg(?=\?|$)/i, ".600x338.jpg"), id);
     }).filter(Boolean) : [];
     const tags = Array.isArray(item.tagids) ? item.tagids.map((tag) => steamTagNames.get(tag)?.[lang]).filter(Boolean) : [];
+    const count = item.reviews?.summary_filtered?.review_count;
     result.set(id, {
       description: steamText(item.basic_info?.short_description, 340),
       tags: [...new Set(tags)].slice(0, 4),
       cover: artworkUrl(CDN + "/store_item_assets/" + header, id),
       screenshots,
+      reviews: Number.isSafeInteger(count) && count >= 0 ? count : null,
     });
   }
   return result;

@@ -1,9 +1,17 @@
 # Random Steam Game
 
-A desktop card that draws from randomly sampled pages of Steam’s public game search.
+A desktop card that draws from randomly sampled pages of Steam’s public game search
+and several depths of its Top Sellers list.
 It changes the game every ten minutes while the fence is visible. Click the dice or
 press **N** while the card has keyboard focus to choose a new game. The card avoids the
 last 250 games it showed. If the local pool is empty, it can draw from 48 bundled games.
+
+The draw chooses a review-count range first, then an unseen game in that range.
+The target weights are 35% for 5,000–8,999, 25% for 9,000–19,999, 15% for 20,000
+or more, 10% for 1,000–4,999, 10% for 500–999, and 5% for 0–499 Steam reviews
+or games Steam returned without a review summary. Ranges without candidates are
+skipped and their weight is distributed among the available ranges. A game whose
+details have yet to load can still appear while the pool is being prepared.
 
 The arrow buttons and frame indicators browse the gallery. Artwork fades between frames.
 Autoplay stops when the gallery is hovered or focused, the fence is hidden, or reduced
@@ -18,8 +26,8 @@ when PecoFence is set to Russian and English otherwise.
   fence is visible. The same host serves the store page when the title opens in a browser.
 - `api.steampowered.com` receives up to 12 public App IDs, the PecoFence display language,
   and the region from the WebView’s language setting (US if absent). Steam returns
-  descriptions, public tag IDs, and artwork paths. The plugin keeps a small pool of
-  prepared cards in memory and prefers it when choosing games. At rest the host
+  descriptions, public tag IDs, artwork paths, and summary review totals. The plugin
+  prefers prepared cards within the selected review range. At rest the host
   receives at most one request per 61 seconds. Choosing a game explicitly can trigger
   an earlier request. Both Steam endpoints work without a Steam account or API key.
 - `shared.akamai.steamstatic.com` receives ordinary HTTPS image requests for the current
